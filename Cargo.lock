@@ -120,9 +120,9 @@ dependencies = [
 
 [[package]]
 name = "hooker"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57095df680016ca94d4426fe0ea787e80a71c3e4e010277c744fbc6d825b83b5"
+checksum = "f90cf0433c26d80275a69549fa3a73c0361f2033572bb6c0bc7a36f83479891a"
 dependencies = [
  "arrayvec",
  "thiserror-no-std",
@@ -465,7 +465,7 @@ checksum = "32b752e52a2da0ddfbdbcc6fceadfeede4c939ed16d13e648833a61dfb611ed8"
 
 [[package]]
 name = "winhooker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hooker",
  "thiserror",
