@@ -8,7 +8,7 @@ use windows::Win32::{
         Diagnostics::Debug::WriteProcessMemory,
         Memory::{
             VirtualAlloc, VirtualFree, VirtualProtect, MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE,
-            PAGE_READWRITE,
+            PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
         },
         ProcessStatus::{GetModuleInformation, MODULEINFO},
         Threading::GetCurrentProcess,
@@ -89,12 +89,13 @@ impl Allocation {
         }
     }
     fn make_executable_and_read_only(&mut self) {
+        let mut old_prot: MaybeUninit<PAGE_PROTECTION_FLAGS> = MaybeUninit::uninit();
         unsafe {
             VirtualProtect(
                 self.ptr.cast(),
                 self.size,
                 PAGE_EXECUTE,
-                core::ptr::null_mut(),
+                old_prot.as_mut_ptr(),
             )
             .expect("failed to change memory protection to executable")
         }
