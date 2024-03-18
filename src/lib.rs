@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, mem::MaybeUninit};
+use std::mem::MaybeUninit;
 
 use hooker::gen_hook_info;
 use thiserror::Error;
@@ -17,22 +17,7 @@ use windows::Win32::{
 
 /// hooks the function with the given `fn_addr` from the given `module` such that when the function is called it instead jumps
 /// to the given `hook_to_addr`.
-/// you must provide a proper function pointer type in the `_fn_signature` argument so that you can later call the function using
-/// its correct signature when calling the original function though the trampoline.
-pub fn hook_function<F: Copy>(
-    module: HMODULE,
-    fn_addr: usize,
-    hook_to_addr: usize,
-    _fn_signature: F,
-) -> Result<Hook<F>> {
-    // make sure that the provided fn signature indeed looks like a function pointer
-    assert!(
-        core::mem::size_of::<F>() == core::mem::size_of::<usize>()
-            && core::mem::align_of::<F>() == core::mem::align_of::<usize>(),
-        "provided function signature type {} is not a function pointer",
-        core::any::type_name::<F>()
-    );
-
+pub fn hook_function(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Result<Hook> {
     let mut module_info_uninit: MaybeUninit<MODULEINFO> = MaybeUninit::uninit();
     unsafe {
         GetModuleInformation(
@@ -81,7 +66,6 @@ pub fn hook_function<F: Copy>(
 
     Ok(Hook {
         trampoline: trampiline_alloc,
-        phantom: PhantomData,
         fn_addr,
         hook_to_addr,
     })
@@ -140,29 +124,33 @@ impl Drop for Allocation {
         }
     }
 }
-
-/// information about a hook that was placed on some function
-pub struct HookInfo {
-    /// the hook's trampoline which can be used to call the original function
-    pub trampoline: Allocation,
-    /// the address of the hooked function
-    pub fn_addr: usize,
-    /// the address that the hooked function was hooked to
-    pub hook_to_addr: usize,
-}
-
 /// a hook that was placed on some function
-pub struct Hook<F> {
+pub struct Hook {
     trampoline: Allocation,
-    phantom: PhantomData<F>,
     fn_addr: usize,
     hook_to_addr: usize,
 }
-impl<F> Hook<F> {
-    /// provides an interface for calling the original function
-    pub fn original(&self) -> F {
+impl Hook {
+    /// returns an address of a function which when called will simulate the original function behaviour without the hook.
+    pub fn original_addr(&self) -> usize {
+        self.trampoline.ptr as usize
+    }
+    /// provides an interface for calling a function which will simulate the original function behaviour without the hook.
+    /// the generic argument `F` should be a function pointer signature of the original function (e.g `extern "C" fn(i32) -> i32`).
+    ///
+    /// # Safety
+    ///
+    /// the generic argument `F` must be a function pointer, and must have the correct signature of the original function.
+    pub unsafe fn original<F: Copy>(&self) -> F {
+        // make sure that the provided fn signature indeed looks like a function pointer
+        assert!(
+            core::mem::size_of::<F>() == core::mem::size_of::<usize>()
+                && core::mem::align_of::<F>() == core::mem::align_of::<usize>(),
+            "provided function signature type {} is not a function pointer",
+            core::any::type_name::<F>()
+        );
         let trampoline_ptr = self.trampoline.ptr;
-        unsafe { core::mem::transmute_copy(&trampoline_ptr) }
+        core::mem::transmute_copy(&trampoline_ptr)
     }
     /// returns the address of the hooked function
     pub fn fn_addr(&self) -> usize {
@@ -176,21 +164,9 @@ impl<F> Hook<F> {
     pub fn trampoline(&self) -> &Allocation {
         &self.trampoline
     }
-    /// returns a mutable reference to the hook's trampoline
-    pub fn trampoline_mut(&mut self) -> &mut Allocation {
-        &mut self.trampoline
-    }
     /// returns the hook's trampoline
     pub fn into_trampoline(self) -> Allocation {
         self.trampoline
-    }
-    /// returns the hook's information
-    pub fn into_hook_info(self) -> HookInfo {
-        HookInfo {
-            trampoline: self.trampoline,
-            fn_addr: self.fn_addr,
-            hook_to_addr: self.hook_to_addr,
-        }
     }
 }
 

@@ -10,6 +10,6 @@ keywords = ["hook", "x86", "windows"]
 categories = []
 
 [dependencies]
-hooker = { version = "0.1.3", features = ["std"] }
+hooker = { version = "0.1.4", features = ["std"] }
 thiserror = "1.0.58"
 windows = { version = "0.54.0", features = ["Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_Memory", "Wdk_System_SystemServices"] }
