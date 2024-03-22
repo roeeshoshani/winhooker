@@ -1,4 +1,9 @@
-use std::mem::MaybeUninit;
+use std::{
+    cell::UnsafeCell,
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut},
+    sync::atomic::AtomicBool,
+};
 
 use hooker::gen_hook_info;
 use thiserror::Error;
@@ -18,6 +23,144 @@ use windows::{
         },
     },
 };
+
+/// a lock which just fails when trying to lock it while it is already locked.
+struct SingleLock<T> {
+    value: UnsafeCell<T>,
+    is_locked: AtomicBool,
+}
+impl<T> SingleLock<T> {
+    /// creates a new lock with the given value
+    const fn new(value: T) -> Self {
+        Self {
+            value: UnsafeCell::new(value),
+            is_locked: AtomicBool::new(false),
+        }
+    }
+    /// locks the lock and returns a guard. if the lock is already locked, returns `None`.
+    fn lock(&self) -> Option<SingleLockGuard<T>> {
+        if self
+            .is_locked
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return None;
+        }
+        Some(SingleLockGuard { lock: self })
+    }
+}
+unsafe impl<T> Send for SingleLock<T> {}
+unsafe impl<T> Sync for SingleLock<T> {}
+
+/// a single lock guard which unlocks the lock when dropped.
+struct SingleLockGuard<'a, T> {
+    lock: &'a SingleLock<T>,
+}
+impl<'a, T> Drop for SingleLockGuard<'a, T> {
+    fn drop(&mut self) {
+        self.lock
+            .is_locked
+            .store(false, std::sync::atomic::Ordering::Release)
+    }
+}
+impl<'a, T> Deref for SingleLockGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.lock.value.get() }
+    }
+}
+impl<'a, T> DerefMut for SingleLockGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.lock.value.get() }
+    }
+}
+
+/// a static hook which can be used to store hook information as a static variable so that it can easily be accessed from anywhere.
+pub struct StaticHook {
+    hook: SingleLock<Option<Hook>>,
+}
+impl StaticHook {
+    const HOOK_USED_MULTIPLE_TIMES_ERR_MSG: &'static str = "static hook used multiple times";
+
+    /// creates a new, empty, static hook.
+    pub const fn new() -> Self {
+        Self {
+            hook: SingleLock::new(None),
+        }
+    }
+    /// locks the hook and returns a lock guard for it.
+    ///
+    /// # Panics
+    ///
+    /// panics if the lock is already held
+    fn lock_hook(&self) -> SingleLockGuard<Option<Hook>> {
+        self.hook
+            .lock()
+            .expect(Self::HOOK_USED_MULTIPLE_TIMES_ERR_MSG)
+    }
+
+    /// locks the hook, makes sure that it is empty, and returns a lock guard for it.
+    ///
+    /// # Panics
+    ///
+    /// panics if the lock is already held or if the hook is not empty
+    fn lock_hook_and_assert_empty(&self) -> SingleLockGuard<Option<Hook>> {
+        let hook = self.lock_hook();
+        if hook.is_some() {
+            panic!("{}", Self::HOOK_USED_MULTIPLE_TIMES_ERR_MSG)
+        }
+        hook
+    }
+
+    /// hooks the function with the given `fn_addr` from the given `module` such that when the function is called it instead jumps
+    /// to the given `hook_to_addr`.
+    ///
+    /// # Panics
+    ///
+    /// panics if this static hook was already used to hook some function.
+    pub fn hook_function(
+        &self,
+        module: HMODULE,
+        fn_addr: usize,
+        hook_to_addr: usize,
+    ) -> Result<()> {
+        let mut hook = self.lock_hook_and_assert_empty();
+        let created_hook = hook_function(module, fn_addr, hook_to_addr)?;
+        *hook = Some(created_hook);
+        Ok(())
+    }
+
+    /// hooks the function with the `fn_name` from the library with the provided `library_name` such that when the function is called it instead jumps
+    /// to the given `hook_to_addr`.
+    ///
+    /// # Panics
+    ///
+    /// panics if this static hook was already used to hook some function.
+    pub fn hook_function_by_name(
+        &self,
+        library_name: PCSTR,
+        fn_name: PCSTR,
+        hook_to_addr: usize,
+    ) -> Result<()> {
+        let mut hook = self.lock_hook_and_assert_empty();
+        let created_hook = hook_function_by_name(library_name, fn_name, hook_to_addr)?;
+        *hook = Some(created_hook);
+        Ok(())
+    }
+
+    /// returns a reference to the hook.
+    ///
+    /// # Panics
+    ///
+    /// panics if the static hook was not yet used to hook any function.
+    pub fn get_hook(&self) -> &Hook {
+        let hook_guard = self.lock_hook();
+        let hook_opt = unsafe { &*(hook_guard.deref() as *const Option<Hook>) };
+        hook_opt
+            .as_ref()
+            .expect("static hook used before hooking any function")
+    }
+}
 
 /// a guard which calls `FreeLibrary` on the module handle when dropped.
 struct ModuleHandleGuard(HMODULE);
