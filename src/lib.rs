@@ -2,18 +2,42 @@ use std::mem::MaybeUninit;
 
 use hooker::gen_hook_info;
 use thiserror::Error;
-use windows::Win32::{
-    Foundation::HMODULE,
-    System::{
-        Diagnostics::Debug::WriteProcessMemory,
-        Memory::{
-            VirtualAlloc, VirtualFree, VirtualProtect, MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE,
-            PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
+use windows::{
+    core::{s, PCSTR},
+    Win32::{
+        Foundation::{FreeLibrary, HMODULE},
+        System::{
+            Diagnostics::Debug::WriteProcessMemory,
+            LibraryLoader::{GetProcAddress, LoadLibraryA},
+            Memory::{
+                VirtualAlloc, VirtualFree, VirtualProtect, MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE,
+                PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
+            },
+            ProcessStatus::{GetModuleInformation, MODULEINFO},
+            Threading::GetCurrentProcess,
         },
-        ProcessStatus::{GetModuleInformation, MODULEINFO},
-        Threading::GetCurrentProcess,
     },
 };
+
+struct ModuleHandleGuard(HMODULE);
+impl Drop for ModuleHandleGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { FreeLibrary(self.0) };
+    }
+}
+
+/// hooks the function with the `fn_name` from the library with the provided `library_name` such that when the function is called it instead jumps
+/// to the given `hook_to_addr`.
+pub fn hook_function_by_name(
+    library_name: PCSTR,
+    fn_name: PCSTR,
+    hook_to_addr: usize,
+) -> Result<Hook> {
+    let module = unsafe { LoadLibraryA(library_name).map_err(Error::FailedToLoadLibrary)? };
+    let _module_guard = ModuleHandleGuard(module);
+    let fn_addr = unsafe { GetProcAddress(module, fn_name).ok_or(Error::NoFunctionWithThatName)? };
+    hook_function(module, fn_addr as usize, hook_to_addr)
+}
 
 /// hooks the function with the given `fn_addr` from the given `module` such that when the function is called it instead jumps
 /// to the given `hook_to_addr`.
@@ -176,6 +200,12 @@ impl Hook {
 pub enum Error {
     #[error("failed to get module information")]
     FailedToGetModuleInformation(#[source] windows::core::Error),
+
+    #[error("failed to load library")]
+    FailedToLoadLibrary(#[source] windows::core::Error),
+
+    #[error("no function with the provided name exists in the specified library")]
+    NoFunctionWithThatName,
 
     #[error("failed to generate hook info")]
     FailedToGenHookInfo(
