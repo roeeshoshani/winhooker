@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 use hooker::gen_hook_info;
 use thiserror::Error;
 use windows::{
-    core::{s, PCSTR},
+    core::PCSTR,
     Win32::{
         Foundation::{FreeLibrary, HMODULE},
         System::{
