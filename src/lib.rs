@@ -10,10 +10,10 @@ use core::{
 
 use hooker::gen_hook_info;
 use thiserror_no_std::Error;
-use windows::{
+use windows_sys::{
     core::PCSTR,
     Win32::{
-        Foundation::{FreeLibrary, HMODULE},
+        Foundation::{FreeLibrary, GetLastError, HMODULE},
         System::{
             Diagnostics::Debug::WriteProcessMemory,
             LibraryLoader::{GetProcAddress, LoadLibraryA},
@@ -201,9 +201,11 @@ pub fn hook_function_by_name(
     fn_name: PCSTR,
     hook_to_addr: usize,
 ) -> Result<Hook> {
-    let module_guard = ModuleHandleGuard(unsafe {
-        LoadLibraryA(library_name).map_err(Error::FailedToLoadLibrary)?
-    });
+    let load_library_res = unsafe { LoadLibraryA(library_name) };
+    if load_library_res == 0 {
+        return Err(Error::FailedToLoadLibrary(WinapiError::last_error()));
+    }
+    let module_guard = ModuleHandleGuard(load_library_res);
     let fn_addr =
         unsafe { GetProcAddress(module_guard.0, fn_name).ok_or(Error::NoFunctionWithThatName)? };
     hook_function(module_guard.0, fn_addr as usize, hook_to_addr)
@@ -213,15 +215,19 @@ pub fn hook_function_by_name(
 /// to the given `hook_to_addr`.
 pub fn hook_function(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Result<Hook> {
     let mut module_info_uninit: MaybeUninit<MODULEINFO> = MaybeUninit::uninit();
-    unsafe {
+    let res = unsafe {
         GetModuleInformation(
             GetCurrentProcess(),
             module,
             module_info_uninit.as_mut_ptr(),
             core::mem::size_of::<MODULEINFO>() as u32,
         )
-        .map_err(Error::FailedToGetModuleInformation)?
     };
+    if res == 0 {
+        return Err(Error::FailedToGetModuleInformation(
+            WinapiError::last_error(),
+        ));
+    }
     let module_info = unsafe { module_info_uninit.assume_init() };
     let module_end_addr = module_info.lpBaseOfDll as usize + module_info.SizeOfImage as usize;
     let fn_max_possible_size = module_end_addr - fn_addr;
@@ -241,16 +247,16 @@ pub fn hook_function(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Re
     // write the jumper
     let jumper_code = hook_info.jumper();
     let mut bytes_written = 0;
-    unsafe {
+    let res = unsafe {
         WriteProcessMemory(
             GetCurrentProcess(),
             fn_addr as *const _,
             jumper_code.as_ptr().cast(),
             jumper_code.len(),
-            Some(&mut bytes_written),
+            &mut bytes_written,
         )
-        .unwrap()
-    }
+    };
+    assert_ne!(res, 0, "failed to write jumper");
     // make sure that all bytes were written
     assert_eq!(
         bytes_written,
@@ -272,7 +278,7 @@ pub struct Allocation {
 }
 impl Allocation {
     fn new(size: usize) -> Self {
-        let ptr = unsafe { VirtualAlloc(None, size, MEM_COMMIT, PAGE_READWRITE) };
+        let ptr = unsafe { VirtualAlloc(core::ptr::null(), size, MEM_COMMIT, PAGE_READWRITE) };
         if ptr.is_null() {
             // should never happen except for OOM, in which case the default behaviour is to panic anyways.
             panic!("failed to allocate read-write memory using VirtualAlloc");
@@ -284,15 +290,15 @@ impl Allocation {
     }
     fn make_executable_and_read_only(&mut self) {
         let mut old_prot: MaybeUninit<PAGE_PROTECTION_FLAGS> = MaybeUninit::uninit();
-        unsafe {
+        let res = unsafe {
             VirtualProtect(
                 self.ptr.cast(),
                 self.size,
                 PAGE_EXECUTE,
                 old_prot.as_mut_ptr(),
             )
-            .expect("failed to change memory protection to executable")
-        }
+        };
+        assert_ne!(res, 0, "failed to change memory protection to executable");
     }
     /// # Safety
     /// must be called only if the memory still has write permissions
@@ -365,14 +371,25 @@ impl Hook {
     }
 }
 
+/// a winapi error
+#[derive(Debug, Error)]
+#[error("winapi error code 0x{0:x}")]
+pub struct WinapiError(pub u32);
+impl WinapiError {
+    /// returns the last error that occured.
+    pub fn last_error() -> Self {
+        Self(unsafe { GetLastError() })
+    }
+}
+
 /// an error that occurs while hooking a function
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("failed to get module information")]
-    FailedToGetModuleInformation(#[source] windows::core::Error),
+    FailedToGetModuleInformation(#[source] WinapiError),
 
     #[error("failed to load library")]
-    FailedToLoadLibrary(#[source] windows::core::Error),
+    FailedToLoadLibrary(#[source] WinapiError),
 
     #[error("no function with the provided name exists in the specified library")]
     NoFunctionWithThatName,
