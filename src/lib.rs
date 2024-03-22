@@ -19,6 +19,7 @@ use windows::{
     },
 };
 
+/// a guard which calls `FreeLibrary` on the module handle when dropped.
 struct ModuleHandleGuard(HMODULE);
 impl Drop for ModuleHandleGuard {
     fn drop(&mut self) {
@@ -33,10 +34,12 @@ pub fn hook_function_by_name(
     fn_name: PCSTR,
     hook_to_addr: usize,
 ) -> Result<Hook> {
-    let module = unsafe { LoadLibraryA(library_name).map_err(Error::FailedToLoadLibrary)? };
-    let _module_guard = ModuleHandleGuard(module);
-    let fn_addr = unsafe { GetProcAddress(module, fn_name).ok_or(Error::NoFunctionWithThatName)? };
-    hook_function(module, fn_addr as usize, hook_to_addr)
+    let module_guard = ModuleHandleGuard(unsafe {
+        LoadLibraryA(library_name).map_err(Error::FailedToLoadLibrary)?
+    });
+    let fn_addr =
+        unsafe { GetProcAddress(module_guard.0, fn_name).ok_or(Error::NoFunctionWithThatName)? };
+    hook_function(module_guard.0, fn_addr as usize, hook_to_addr)
 }
 
 /// hooks the function with the given `fn_addr` from the given `module` such that when the function is called it instead jumps
