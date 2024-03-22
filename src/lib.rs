@@ -1,5 +1,6 @@
 use std::{
     cell::UnsafeCell,
+    marker::PhantomData,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     sync::atomic::AtomicBool,
@@ -76,16 +77,19 @@ impl<'a, T> DerefMut for SingleLockGuard<'a, T> {
 }
 
 /// a static hook which can be used to store hook information as a static variable so that it can easily be accessed from anywhere.
-pub struct StaticHook {
+/// the generic argument `F` should be a function pointer signature of the hooked function (e.g `extern "C" fn(i32) -> i32`).
+pub struct StaticHook<F: Copy> {
     hook: SingleLock<Option<Hook>>,
+    phantom: PhantomData<F>,
 }
-impl StaticHook {
+impl<F: Copy> StaticHook<F> {
     const HOOK_USED_MULTIPLE_TIMES_ERR_MSG: &'static str = "static hook used multiple times";
 
     /// creates a new, empty, static hook.
     pub const fn new() -> Self {
         Self {
             hook: SingleLock::new(None),
+            phantom: PhantomData,
         }
     }
     /// locks the hook and returns a lock guard for it.
@@ -115,10 +119,14 @@ impl StaticHook {
     /// hooks the function with the given `fn_addr` from the given `module` such that when the function is called it instead jumps
     /// to the given `hook_to_addr`.
     ///
+    /// # Safety
+    ///
+    /// the signature of the provided function must match the signature of this static hook.
+    ///
     /// # Panics
     ///
     /// panics if this static hook was already used to hook some function.
-    pub fn hook_function(
+    pub unsafe fn hook_function(
         &self,
         module: HMODULE,
         fn_addr: usize,
@@ -132,6 +140,10 @@ impl StaticHook {
 
     /// hooks the function with the `fn_name` from the library with the provided `library_name` such that when the function is called it instead jumps
     /// to the given `hook_to_addr`.
+    ///
+    /// # Safety
+    ///
+    /// the signature of the provided function must match the signature of this static hook.
     ///
     /// # Panics
     ///
@@ -159,6 +171,16 @@ impl StaticHook {
         hook_opt
             .as_ref()
             .expect("static hook used before hooking any function")
+    }
+
+    /// provides an interface for calling a function which will simulate the original function behaviour without the hook.
+    ///
+    /// # Panics
+    ///
+    /// panics if the static hook was not yet used to hook any function.
+    pub fn original(&self) -> F {
+        let hook = self.get_hook();
+        unsafe { hook.original() }
     }
 }
 
