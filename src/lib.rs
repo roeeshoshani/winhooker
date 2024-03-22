@@ -1,4 +1,6 @@
-use std::{
+#![cfg_attr(not(feature = "std"), no_std)]
+
+use core::{
     cell::UnsafeCell,
     marker::PhantomData,
     mem::MaybeUninit,
@@ -7,7 +9,7 @@ use std::{
 };
 
 use hooker::gen_hook_info;
-use thiserror::Error;
+use thiserror_no_std::Error;
 use windows::{
     core::PCSTR,
     Win32::{
@@ -42,7 +44,7 @@ impl<T> SingleLock<T> {
     fn lock(&self) -> Option<SingleLockGuard<T>> {
         if self
             .is_locked
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
+            .swap(true, core::sync::atomic::Ordering::AcqRel)
         {
             return None;
         }
@@ -60,7 +62,7 @@ impl<'a, T> Drop for SingleLockGuard<'a, T> {
     fn drop(&mut self) {
         self.lock
             .is_locked
-            .store(false, std::sync::atomic::Ordering::Release)
+            .store(false, core::sync::atomic::Ordering::Release)
     }
 }
 impl<'a, T> Deref for SingleLockGuard<'a, T> {
