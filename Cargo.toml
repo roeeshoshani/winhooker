@@ -1,6 +1,6 @@
 [package]
 name = "winhooker"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 authors = ["Roee Shoshani"]
 description = "a helper for hooking functions in windows on x64"
@@ -10,7 +10,7 @@ keywords = ["hook", "x86", "windows"]
 categories = []
 
 [dependencies]
-hooker = "0.1.6"
+hooker = "0.1.7"
 thiserror-no-std = "2.0.2"
 windows-sys = { version = "0.52.0", features = ["Win32_Foundation", "Win32_System_SystemServices", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_Memory_NonVolatile", "Win32_System_Diagnostics_Debug"] }
 

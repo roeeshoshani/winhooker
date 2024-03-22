@@ -120,9 +120,9 @@ dependencies = [
 
 [[package]]
 name = "hooker"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f759948fa91e2489b034f5fce0cffea690cddac9e39b2810b11574bedcadd0e2"
+checksum = "8f8149f0223ad4fb1a87bd5d1add5c0687a998e0aea3eb4fdd3bdd10443ce813"
 dependencies = [
  "arrayvec",
  "thiserror-no-std",
@@ -416,7 +416,7 @@ checksum = "32b752e52a2da0ddfbdbcc6fceadfeede4c939ed16d13e648833a61dfb611ed8"
 
 [[package]]
 name = "winhooker"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "hooker",
  "thiserror-no-std",
@@ -425,9 +425,9 @@ dependencies = [
 
 [[package]]
 name = "zydis-sys"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db5e2b765fc9dbe8bec101f780ce7edacb1aaa585ffd246cbe542f95587d23b2"
+checksum = "ff78d06d4a8a06eb1adbf5ff9383ff36616e29c74822257ef0cc70809a9e1149"
 dependencies = [
  "bindgen",
  "cmake",
