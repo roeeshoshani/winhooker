@@ -1,6 +1,6 @@
 [package]
 name = "winhooker"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 authors = ["Roee Shoshani"]
 description = "a helper for hooking functions in windows on x64"
