@@ -8,7 +8,8 @@ use core::{
     sync::atomic::AtomicBool,
 };
 
-use hooker::gen_hook_info;
+use arrayvec::ArrayVec;
+use hooker::{gen_hook_info, MAX_JUMPER_LEN};
 use thiserror_no_std::Error;
 use windows_sys::{
     core::PCSTR,
@@ -244,31 +245,51 @@ pub fn hook_function(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Re
     // done writing the trampoline, now make it executable
     trampiline_alloc.make_executable_and_read_only();
 
+    // copy the original bytes
+    let overwritten_bytes = fn_possible_content[..hook_info.jumper().len()]
+        .try_into()
+        .unwrap();
+
     // write the jumper
     let jumper_code = hook_info.jumper();
-    let mut bytes_written = 0;
-    let res = unsafe {
-        WriteProcessMemory(
-            GetCurrentProcess(),
-            fn_addr as *const _,
-            jumper_code.as_ptr().cast(),
-            jumper_code.len(),
-            &mut bytes_written,
-        )
-    };
-    assert_ne!(res, 0, "failed to write jumper");
-    // make sure that all bytes were written
-    assert_eq!(
-        bytes_written,
-        jumper_code.len(),
-        "not all bytes of jumper were written to the start of the function"
-    );
+    write_current_process_memory(fn_addr, &jumper_code);
 
     Ok(Hook {
         trampoline: trampiline_alloc,
         fn_addr,
         hook_to_addr,
+        overwritten_bytes,
     })
+}
+
+/// writes the given bytes to the given address in the memory of the current process, but allows writing to non-writable memory.
+fn write_current_process_memory(addr: usize, bytes: &[u8]) {
+    let mut bytes_written = 0;
+    let res = unsafe {
+        WriteProcessMemory(
+            GetCurrentProcess(),
+            addr as *const _,
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            &mut bytes_written,
+        )
+    };
+    assert_ne!(
+        res,
+        0,
+        "failed to write {} bytes to address 0x{:x}",
+        bytes.len(),
+        addr
+    );
+    // make sure that all bytes were written
+    assert_eq!(
+        bytes_written,
+        bytes.len(),
+        "only {} out of {} bytes were written when trying to write to address 0x{:x}",
+        bytes_written,
+        bytes.len(),
+        addr
+    );
 }
 
 /// a memory allocation
@@ -328,6 +349,7 @@ impl Drop for Allocation {
 /// a hook that was placed on some function
 pub struct Hook {
     trampoline: Allocation,
+    overwritten_bytes: ArrayVec<u8, MAX_JUMPER_LEN>,
     fn_addr: usize,
     hook_to_addr: usize,
 }
@@ -368,6 +390,10 @@ impl Hook {
     /// returns the hook's trampoline
     pub fn into_trampoline(self) -> Allocation {
         self.trampoline
+    }
+    /// remove this hook
+    pub fn remove(self) {
+        write_current_process_memory(self.fn_addr, &self.overwritten_bytes)
     }
 }
 
