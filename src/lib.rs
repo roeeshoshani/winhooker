@@ -87,6 +87,8 @@ pub struct StaticHook<F: Copy> {
 }
 impl<F: Copy> StaticHook<F> {
     const HOOK_USED_MULTIPLE_TIMES_ERR_MSG: &'static str = "static hook used multiple times";
+    const HOOK_USED_BEFORE_HOOKING_ERR_MSG: &'static str =
+        "static hook used before hooking any function";
 
     /// creates a new, empty, static hook.
     pub const fn new() -> Self {
@@ -173,7 +175,7 @@ impl<F: Copy> StaticHook<F> {
         let hook_opt = unsafe { &*(hook_guard.deref() as *const Option<Hook>) };
         hook_opt
             .as_ref()
-            .expect("static hook used before hooking any function")
+            .expect(Self::HOOK_USED_BEFORE_HOOKING_ERR_MSG)
     }
 
     /// provides an interface for calling a function which will simulate the original function behaviour without the hook.
@@ -184,6 +186,15 @@ impl<F: Copy> StaticHook<F> {
     pub fn original(&self) -> F {
         let hook = self.get_hook();
         unsafe { hook.original() }
+    }
+
+    /// removes this hook. if the static hook was not yet used to hook any function, this does nothing.
+    pub fn remove(&self) {
+        let mut hook_guard = self.lock_hook();
+        let hook_opt = unsafe { &mut *(hook_guard.deref_mut() as *mut Option<Hook>) };
+        if let Some(hook) = hook_opt.take() {
+            hook.remove()
+        }
     }
 }
 
