@@ -309,7 +309,7 @@ pub struct Allocation {
     size: usize,
 }
 impl Allocation {
-    fn new(size: usize) -> Self {
+    pub fn new(size: usize) -> Self {
         let ptr = unsafe { VirtualAlloc(core::ptr::null(), size, MEM_COMMIT, PAGE_READWRITE) };
         if ptr.is_null() {
             // should never happen except for OOM, in which case the default behaviour is to panic anyways.
@@ -320,7 +320,7 @@ impl Allocation {
             size,
         }
     }
-    fn make_executable_and_read_only(&mut self) {
+    pub fn make_executable_and_read_only(&mut self) {
         let mut old_prot: MaybeUninit<PAGE_PROTECTION_FLAGS> = MaybeUninit::uninit();
         let res = unsafe {
             VirtualProtect(
@@ -334,7 +334,7 @@ impl Allocation {
     }
     /// # Safety
     /// must be called only if the memory still has write permissions
-    unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+    pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { core::slice::from_raw_parts_mut(self.ptr, self.size) }
     }
     /// returns a pointer to the allocation
