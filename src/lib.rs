@@ -9,7 +9,7 @@ use core::{
 };
 
 use arrayvec::ArrayVec;
-use hooker::{gen_hook_info, MAX_JUMPER_LEN};
+use hooker::{gen_hook_info, HookInfo, JumperBytes, MAX_JUMPER_LEN};
 use thiserror_no_std::Error;
 use windows_sys::{
     core::PCSTR,
@@ -223,9 +223,15 @@ pub fn hook_function_by_name(
     hook_function(module_guard.0, fn_addr as usize, hook_to_addr)
 }
 
-/// hooks the function with the given `fn_addr` from the given `module` such that when the function is called it instead jumps
-/// to the given `hook_to_addr`.
-pub fn hook_function(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Result<Hook> {
+/// returns a slice which represents the possible content of the function at the given address in the given module.
+///
+/// # Safety
+///
+/// the returned byte slice is only valid while the module is in memory
+pub unsafe fn module_get_fn_possible_content(
+    module: HMODULE,
+    fn_addr: usize,
+) -> Result<&'static [u8]> {
     let mut module_info_uninit: MaybeUninit<MODULEINFO> = MaybeUninit::uninit();
     let res = unsafe {
         GetModuleInformation(
@@ -243,12 +249,16 @@ pub fn hook_function(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Re
     let module_info = unsafe { module_info_uninit.assume_init() };
     let module_end_addr = module_info.lpBaseOfDll as usize + module_info.SizeOfImage as usize;
     let fn_max_possible_size = module_end_addr - fn_addr;
-    let fn_possible_content =
-        unsafe { core::slice::from_raw_parts(fn_addr as *const u8, fn_max_possible_size) };
-    let hook_info = gen_hook_info(fn_possible_content, fn_addr as u64, hook_to_addr as u64)?;
 
-    // allocate the trampoline and copy its code
+    Ok(unsafe { core::slice::from_raw_parts(fn_addr as *const u8, fn_max_possible_size) })
+}
+
+/// allocates and builds the trampoline to a heap allocated executable memory region.
+pub fn alloc_and_build_trampoline(hook_info: &HookInfo) -> Allocation {
+    // allocate the trampoline
     let mut trampiline_alloc = Allocation::new(hook_info.trampoline_size());
+
+    // write the trampoline code
     let trampoline_code = hook_info.build_trampoline(trampiline_alloc.ptr as u64);
     let trampoline_alloc_slice = unsafe { trampiline_alloc.as_mut_slice() };
     trampoline_alloc_slice[..trampoline_code.len()].copy_from_slice(&trampoline_code);
@@ -256,21 +266,36 @@ pub fn hook_function(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Re
     // done writing the trampoline, now make it executable
     trampiline_alloc.make_executable_and_read_only();
 
+    trampiline_alloc
+}
+
+/// prepares a hook to be placed on the given `fn_addr` from the given `module`, but doesn't actually put the hook on the function.
+pub fn prepare_hook(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Result<PreparedHook> {
+    let fn_possible_content = unsafe { module_get_fn_possible_content(module, fn_addr) }?;
+    let hook_info = gen_hook_info(fn_possible_content, fn_addr as u64, hook_to_addr as u64)?;
+
+    // create the trampoline
+    let trampiline_alloc = alloc_and_build_trampoline(&hook_info);
+
     // copy the original bytes
     let overwritten_bytes = fn_possible_content[..hook_info.jumper().len()]
         .try_into()
         .unwrap();
 
-    // write the jumper
-    let jumper_code = hook_info.jumper();
-    write_current_process_memory(fn_addr, &jumper_code);
-
-    Ok(Hook {
+    Ok(PreparedHook {
         trampoline: trampiline_alloc,
         fn_addr,
         hook_to_addr,
         overwritten_bytes,
+        jumper_code: hook_info.jumper().clone(),
     })
+}
+
+/// hooks the function with the given `fn_addr` from the given `module` such that when the function is called it instead jumps
+/// to the given `hook_to_addr`.
+pub fn hook_function(module: HMODULE, fn_addr: usize, hook_to_addr: usize) -> Result<Hook> {
+    let prepared_hook = prepare_hook(module, fn_addr, hook_to_addr)?;
+    Ok(prepared_hook.hook())
 }
 
 /// writes the given bytes to the given address in the memory of the current process, but allows writing to non-writable memory.
@@ -357,6 +382,32 @@ impl Drop for Allocation {
         }
     }
 }
+
+/// a hook that was prepared to be placed on some function
+pub struct PreparedHook {
+    trampoline: Allocation,
+    overwritten_bytes: ArrayVec<u8, MAX_JUMPER_LEN>,
+    fn_addr: usize,
+    hook_to_addr: usize,
+    jumper_code: JumperBytes,
+}
+impl PreparedHook {
+    /// returns a reference to the trampoline prepared for this hook.
+    pub fn trampoline(&self) -> &Allocation {
+        &self.trampoline
+    }
+    /// actually hooks the function.
+    pub fn hook(self) -> Hook {
+        write_current_process_memory(self.fn_addr, &self.jumper_code);
+        Hook {
+            trampoline: self.trampoline,
+            overwritten_bytes: self.overwritten_bytes,
+            fn_addr: self.fn_addr,
+            hook_to_addr: self.hook_to_addr,
+        }
+    }
+}
+
 /// a hook that was placed on some function
 pub struct Hook {
     trampoline: Allocation,
